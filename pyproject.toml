@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-python-runner"
+version = "0.1"
+description = "MCP server for Python code execution and plot generation"
+authors = [
+    {name = "Antony Lewis"},
+]
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "mcp[cli]>=1.6.0"
+]
+
+[project.scripts]
+mcp-python-runner = "mcp_python_runner.main:main"
+
+[tool.setuptools]
+packages = ["mcp_python_runner"]
