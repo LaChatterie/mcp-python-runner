@@ -3,6 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
 # Set up a directory for the pre-installed application's virtual environment
 ENV APP_VENV_DIR=/opt/app-venv
+ENV UV_COMPILE_BYTECODE=1
 
 # Copy the application source code
 # Assuming your Dockerfile is in the root of your project, and your app is defined by (e.g.) a pyproject.toml here.

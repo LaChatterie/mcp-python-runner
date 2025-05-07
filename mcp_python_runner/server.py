@@ -8,10 +8,9 @@ import subprocess
 import tempfile
 import argparse
 from pathlib import Path
-from typing import List
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+# from contextlib import asynccontextmanager
+# from collections.abc import AsyncIterator
+# from dataclasses import dataclass
 import asyncio
 from tempfile import mkdtemp
 from mcp.server.fastmcp import FastMCP, Image
@@ -39,6 +38,45 @@ else:
     default_working_dir = Path(args.dir).absolute()
 
 default_working_dir.mkdir(parents=True, exist_ok=True)
+installed_packages = {}
+
+
+async def initialize_working_dir(requirements):
+    """Initialize the working directory"""
+    default_working_dir.mkdir(parents=True, exist_ok=True)
+    if not any(default_working_dir.glob("*.toml")):
+        # Create a new toml file if it doesn't exist
+        process = await asyncio.create_subprocess_exec(
+            "uv", "--quiet", "init",
+            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
+            stderr=subprocess.PIPE,
+            cwd=default_working_dir
+        )
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(f"Failed to initialize using uv in working directory: {stderr.decode('utf-8')}")
+    if requirements:
+        await install_requirements(default_working_dir, requirements)
+    return default_working_dir
+
+
+async def install_requirements(working_dir: Path, requirements: str):
+    done = installed_packages.get(working_dir) or []
+    if requirements and (to_install := set(requirements.split()).difference(done)):
+        installed_packages[working_dir] = to_install.union(done)
+
+        process = await asyncio.create_subprocess_exec(
+            "uv", "--quiet", "add", *list(to_install),
+            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
+            stderr=subprocess.PIPE,  # Capture stderr separately
+            cwd=working_dir
+        )
+
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"Failed to install requirements using uv in working directory: {stderr.decode('utf-8')}")
+
 
 #
 # @dataclass
@@ -69,55 +107,16 @@ default_working_dir.mkdir(parents=True, exist_ok=True)
 # Create our MCP server
 mcp = FastMCP(
     "Python Runner",
-    description=f"Execute Python code to calculate results and/or plots or files",
+    description="Execute Python code to calculate results and/or plots or files",
     dependencies=["mcp[cli]"]
 )
-
-installed_packages = {}
-
-
-async def initialize_working_dir(requirements):
-    """Initialize the working directory"""
-    default_working_dir.mkdir(parents=True, exist_ok=True)
-    if not any(default_working_dir.glob("*.toml")):
-        # Create a new toml file if it doesn't exist
-        process = await asyncio.create_subprocess_exec(
-            "uv", "--quiet", "init",
-            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
-            stderr=subprocess.PIPE,
-            cwd=default_working_dir
-        )
-        _, stderr = await process.communicate()
-        if process.returncode != 0:
-            raise RuntimeError(f"Failed to initialize using uv in working directory: {stderr.decode('utf-8')}")
-    if requirements:
-        await install_requirements(default_working_dir, requirements)
-    return default_working_dir
-
-
-async def install_requirements(working_dir: Path, requirements: str):
-    if requirements and (
-            to_install := set(requirements.split()).difference(installed_packages.get(working_dir) or [])):
-        installed_packages[working_dir] = to_install.union(installed_packages.get(working_dir, []))
-
-        process = await asyncio.create_subprocess_exec(
-            "uv", "--quiet", "add", *list(to_install),
-            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
-            stderr=subprocess.PIPE,  # Capture stderr separately
-            cwd=working_dir
-        )
-
-        _, stderr = await process.communicate()
-        if process.returncode != 0:
-            raise RuntimeError(
-                f"Failed to install requirements using uv in working directory: {stderr.decode('utf-8')}")
 
 
 @mcp.tool()
 async def execute_python_code(
-        code: str,
-        requirements: str = "",
-) -> tuple[str, tuple(Image)]:
+    code: str,
+    requirements: str = "",
+) -> tuple[str, tuple[Image]]:
     """
     Execute Python code in working_dir and return the result.
     If the code produces files or plots, they will be saved in the working directory.
@@ -170,7 +169,7 @@ async def execute_python_code(
 
             if output_files := list(sorted(new_files)):
                 if len(output_files) == 1 and (os.path.splitext(output_files[0])[1].lower()
-                                               in ('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                                               in {'.png', '.jpg', '.jpeg', '.gif', '.webp'}):
                     return lines[0], (read_image_file(output_files[0]),)
 
                 if external_path := os.environ.get('HOST_PROJECT_PATH'):
@@ -189,11 +188,11 @@ async def execute_python_code(
 def read_file(file_path: str, max_size_kb: int = 1024) -> str:
     """
     Read the content of any file, with size limits for safety.
-    
+
     Args:
         file_path: Path to the file (relative to working directory or absolute)
         max_size_kb: Maximum file size to read in KB (default: 1024)
-    
+
     Returns:
         str: File content or an error message
     """
