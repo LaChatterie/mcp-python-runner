@@ -8,12 +8,12 @@ import subprocess
 import tempfile
 import argparse
 from pathlib import Path
-from typing import List, Optional
-# from contextlib import asynccontextmanager
-# from collections.abc import AsyncIterator
+from typing import List
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 import asyncio
 from tempfile import mkdtemp
-from pydantic import BaseModel
 from mcp.server.fastmcp import FastMCP, Image
 
 if sys.platform == "win32" and os.environ.get('PYTHONIOENCODING') is None:
@@ -28,6 +28,9 @@ _default_working_dir = Path(tempfile.gettempdir()) / 'python_outputs'
 parser = argparse.ArgumentParser(description='MCP Python Runner')
 parser.add_argument('--dir', type=str, default=str(_default_working_dir),
                     help='Working directory for code execution and file operations')
+# parser.add_argument('--packages', type=str, default="matplotlib scipy pandas",
+#                     help='default packages to install')
+
 args, _ = parser.parse_known_args()
 
 if not args.dir:
@@ -37,43 +40,84 @@ else:
 
 default_working_dir.mkdir(parents=True, exist_ok=True)
 
+#
+# @dataclass
+# class AppContext:
+#     working_dir: Path
+#
+#
+# @asynccontextmanager
+# async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+#     """
+#     Manages application lifecycle with type-safe context
+#     for the FastMCP server. Initializes the UnstructuredClient.
+#
+#     Args:
+#         server (FastMCP): The FastMCP server instance.
+#
+#     Returns:
+#         AsyncIterator[AppContext]: An asynchronous context manager providing the
+#         application context.
+#     """
+#     working_dir = await initialize_working_dir(args.packages)
+#     try:
+#         yield AppContext(working_dir)
+#     finally:
+#         pass
+
+
 # Create our MCP server
 mcp = FastMCP(
     "Python Runner",
     description=f"Execute Python code to calculate results and/or plots or files",
-    dependencies=["mcp[cli]", "scipy", "pandas", "matplotlib", "sympy"]
+    dependencies=["mcp[cli]"]
 )
-
-
-class CodeExecutionResponse(BaseModel):
-    stdout: str
-    stderr: str
-    output_files: List[str] = []
-
 
 installed_packages = {}
 
 
-def initialize_working_dir():
+async def initialize_working_dir(requirements):
     """Initialize the working directory"""
     default_working_dir.mkdir(parents=True, exist_ok=True)
     if not any(default_working_dir.glob("*.toml")):
         # Create a new toml file if it doesn't exist
-        process = subprocess.run(
-            ["uv", "init"],
-            capture_output=True, text=True,
-            cwd=default_working_dir, check=False
+        process = await asyncio.create_subprocess_exec(
+            "uv", "--quiet", "init",
+            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
+            stderr=subprocess.PIPE,
+            cwd=default_working_dir
         )
+        _, stderr = await process.communicate()
         if process.returncode != 0:
-            raise RuntimeError(f"Failed to initialize using uv in working directory: {process.stderr}")
+            raise RuntimeError(f"Failed to initialize using uv in working directory: {stderr.decode('utf-8')}")
+    if requirements:
+        await install_requirements(default_working_dir, requirements)
     return default_working_dir
+
+
+async def install_requirements(working_dir: Path, requirements: str):
+    if requirements and (
+            to_install := set(requirements.split()).difference(installed_packages.get(working_dir) or [])):
+        installed_packages[working_dir] = to_install.union(installed_packages.get(working_dir, []))
+
+        process = await asyncio.create_subprocess_exec(
+            "uv", "--quiet", "add", *list(to_install),
+            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
+            stderr=subprocess.PIPE,  # Capture stderr separately
+            cwd=working_dir
+        )
+
+        _, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"Failed to install requirements using uv in working directory: {stderr.decode('utf-8')}")
 
 
 @mcp.tool()
 async def execute_python_code(
         code: str,
         requirements: str = "",
-) -> CodeExecutionResponse:
+) -> tuple[str, tuple(Image)]:
     """
     Execute Python code in working_dir and return the result.
     If the code produces files or plots, they will be saved in the working directory.
@@ -87,46 +131,26 @@ async def execute_python_code(
             Filename for the plots should have the following format: `<plot_name>_<plot_number>_<timestamp>.<format>`.
         requirements: python package dependencies, e.g. 'matplotlib scipy'
     Returns:
-        Dict with stdout, stderr, and list of any output files
+        output text or error, and list of any output files
     """
 
-    working_dir = initialize_working_dir()
+    working_dir = await initialize_working_dir(requirements)
 
     if code.startswith("```python") and code.endswith("```"):
         # Remove the code block markers
         code = code[11:-3].strip()
 
     # Create a temporary file for the code
-    with tempfile.NamedTemporaryFile(suffix='.py', mode='w', delete=False,
+    with tempfile.NamedTemporaryFile(suffix='.py', mode='w', delete=True, delete_on_close=False,
                                      dir=working_dir, encoding='utf-8') as temp:
         temp.write(code)
         temp.close()
         temp_path = temp.name
 
-        if requirements and (
-                to_install := set(requirements.split()).difference(installed_packages.get(working_dir) or [])):
-            installed_packages[working_dir] = to_install.union(installed_packages.get(working_dir, []))
-
-            process = await asyncio.create_subprocess_exec(
-                "uv", "add", *list(to_install),
-                stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
-                stderr=subprocess.PIPE,  # Capture stderr separately
-                cwd=working_dir
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode != 0:
-                return CodeExecutionResponse(
-                    stdout="",
-                    stderr=stderr.decode('utf-8'),
-                    output_files=[]
-                )
-
         files_before = set(os.listdir(working_dir))
 
         process = await asyncio.create_subprocess_exec(
-            *["uv", "run", temp_path],
+            *["uv", "--quiet", "run", temp_path],
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir
@@ -134,26 +158,32 @@ async def execute_python_code(
         stdout, stderr = await process.communicate()
 
         if process.returncode == 0:
+            lines = [stdout.decode('utf-8').strip()]
+
+            common_venv_dirs = {'.venv', '__pypackages__', '.nox', '.tox', 'uv.lock'}
+
             # Get list of files after execution
-            files_after = set(os.listdir(working_dir)) - {'uv.lock'}
+            files_after = set(os.listdir(working_dir)) - common_venv_dirs
 
             # Find new files created during execution
             new_files = files_after - files_before
 
-            output_files = [os.path.normpath(os.path.join(working_dir, file)) for file in sorted(new_files)]
+            if output_files := list(sorted(new_files)):
+                if len(output_files) == 1 and (os.path.splitext(output_files[0])[1].lower()
+                                               in ('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+                    return lines[0], (read_image_file(output_files[0]),)
+
+                if external_path := os.environ.get('HOST_PROJECT_PATH'):
+                    lines.append(f'Files created at {external_path}:')
+                else:
+                    lines.append('Output Files:')
+                lines += output_files
+
         else:
-            output_files = []
+            raise Exception(stderr.decode('utf-8').strip())
 
-        return CodeExecutionResponse(
-            stdout=stdout.decode('utf-8'),
-            stderr=stderr.decode('utf-8'),
-            output_files=output_files
-        )
+        return "\n".join(lines), ()
 
-
-# ============================================================================
-# Resources
-# ============================================================================
 
 @mcp.tool()
 def read_file(file_path: str, max_size_kb: int = 1024) -> str:
@@ -173,17 +203,17 @@ def read_file(file_path: str, max_size_kb: int = 1024) -> str:
 
     try:
         if not path.exists():
-            return f"Error: File '{file_path}' not found"
+            raise FileNotFoundError("File '{file_path}' not found")
 
         # Check file size
         file_size_kb = path.stat().st_size / 1024
         if file_size_kb > max_size_kb:
-            return f"Error: File size ({file_size_kb:.2f} KB) exceeds maximum allowed size ({max_size_kb} KB)"
+            raise Exception(f"File size ({file_size_kb:.2f} KB) exceeds maximum allowed size ({max_size_kb} KB)")
 
         # Determine file type and read accordingly
         try:
             # Try to read as text first
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
 
             # If it's a known source code type, use code block formatting
