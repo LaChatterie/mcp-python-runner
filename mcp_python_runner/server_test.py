@@ -2,7 +2,6 @@ import asyncio
 import subprocess
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from asyncio import sleep
 
 
 async def main():
@@ -39,7 +38,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Only needed for Jupyter notebooks
-    # import nest_asyncio
-    # nest_asyncio.apply()
     asyncio.run(main())

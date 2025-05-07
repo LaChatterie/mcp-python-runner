@@ -16,16 +16,12 @@ A Model Context Protocol (MCP) server that allows LLMs to execute Python code, g
 ### Using Docker (Recommended)
 
 1. Install [Docker](https://www.docker.com/products/docker-desktop/)
-2. Build the Python Runner Docker image from source:
-   ```bash
-   git clone https://github.com/cmbant/mcp-python-runner.git
-   cd mcp-python-runner
-   docker build -t cmbant/python-runner .
-   ```
+
+That's it! The Docker image will be automatically pulled from DockerHub when you first run the server.
 
 The server can then be used by an mcp client, like [Claude Desktop](https://claude.ai/download).
 
-To add the configuration to Claude Desktop, click on menu, then Settings. 
+To add the configuration to Claude Desktop, click on menu, then Settings. From Developer use Edit Config.
 Add the following to your `claude_desktop_config.json`:
 
 ```json

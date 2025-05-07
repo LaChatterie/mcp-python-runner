@@ -19,14 +19,9 @@ if sys.platform == "win32" and os.environ.get('PYTHONIOENCODING') is None:
 
 _default_working_dir = Path(tempfile.gettempdir()) / 'python_outputs'
 
-# Parse command line arguments to get the working directory
-# Use a default value that works when run via uvx
 parser = argparse.ArgumentParser(description='MCP Python Runner')
 parser.add_argument('--dir', type=str, default=str(_default_working_dir),
                     help='Working directory for code execution and file operations')
-# parser.add_argument('--packages', type=str, default="matplotlib scipy pandas",
-#                     help='default packages to install')
-
 args, _ = parser.parse_known_args()
 
 if not args.dir:
@@ -96,7 +91,7 @@ async def execute_python_code(
             The code must be self-contained, including all necessary imports and setup.
             It should not use '.show()' for plots; instead, always save the figure to disk. Unless otherwise specified,
             save into a png file at high resolution (dpi>=300).
-            For nice plots, use latex for maths in labels and titles.
+            For nice plots, use $latex$ for maths in labels and titles (but not usetex=True).
             Filename for the plots should have the following format: `<plot_name>_<plot_number>_<timestamp>.<format>`.
         requirements: python package dependencies, e.g. 'matplotlib scipy'
     Returns:
@@ -159,10 +154,10 @@ async def execute_python_code(
 @mcp.tool()
 def read_file(file_path: str, max_size_kb: int = 1024) -> str:
     """
-    Read the content of any file, with size limits for safety.
+    Read the content of any produced by python code, with size limits for safety.
 
     Args:
-        file_path: Path to the file (relative to working directory or absolute)
+        file_path: Path to the file (relative to working directory)
         max_size_kb: Maximum file size to read in KB (default: 1024)
 
     Returns:
@@ -211,7 +206,7 @@ def read_file(file_path: str, max_size_kb: int = 1024) -> str:
 @mcp.tool()
 def read_image_file(file_path: str) -> Image:
     """
-    Read an image file from the working directory.
+    Read an image file from the working directory, as created by python code.
     ...
     """
     # Ensure path is relative to the working directory
