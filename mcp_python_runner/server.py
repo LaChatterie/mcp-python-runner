@@ -8,9 +8,6 @@ import subprocess
 import tempfile
 import argparse
 from pathlib import Path
-# from contextlib import asynccontextmanager
-# from collections.abc import AsyncIterator
-# from dataclasses import dataclass
 import asyncio
 from tempfile import mkdtemp
 from mcp.server.fastmcp import FastMCP, Image
@@ -44,17 +41,14 @@ installed_packages = {}
 async def initialize_working_dir(requirements):
     """Initialize the working directory"""
     default_working_dir.mkdir(parents=True, exist_ok=True)
-    if not any(default_working_dir.glob("*.toml")):
-        # Create a new toml file if it doesn't exist
-        process = await asyncio.create_subprocess_exec(
-            "uv", "--quiet", "init",
-            stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
-            stderr=subprocess.PIPE,
-            cwd=default_working_dir
-        )
-        _, stderr = await process.communicate()
-        if process.returncode != 0:
-            raise RuntimeError(f"Failed to initialize using uv in working directory: {stderr.decode('utf-8')}")
+
+    # Create cache directory if it doesn't exist
+    cache_dir = default_working_dir / ".cache"
+    cache_dir.mkdir(exist_ok=True)
+
+    # Set UV_CACHE_DIR environment variable to use our cache directory
+    os.environ["UV_CACHE_DIR"] = str(cache_dir)
+
     if requirements:
         await install_requirements(default_working_dir, requirements)
     return default_working_dir
@@ -65,8 +59,10 @@ async def install_requirements(working_dir: Path, requirements: str):
     if requirements and (to_install := set(requirements.split()).difference(done)):
         installed_packages[working_dir] = to_install.union(done)
 
+        # Use the current Python executable
         process = await asyncio.create_subprocess_exec(
-            "uv", "--quiet", "add", *list(to_install),
+            "uv", "--quiet", "pip", "install", *list(to_install),
+            "--python", sys.executable,
             stdout=subprocess.PIPE,  # Capture stdout to avoid polluting MCP stdio
             stderr=subprocess.PIPE,  # Capture stderr separately
             cwd=working_dir
@@ -76,32 +72,6 @@ async def install_requirements(working_dir: Path, requirements: str):
         if process.returncode != 0:
             raise RuntimeError(
                 f"Failed to install requirements using uv in working directory: {stderr.decode('utf-8')}")
-
-
-#
-# @dataclass
-# class AppContext:
-#     working_dir: Path
-#
-#
-# @asynccontextmanager
-# async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-#     """
-#     Manages application lifecycle with type-safe context
-#     for the FastMCP server. Initializes the UnstructuredClient.
-#
-#     Args:
-#         server (FastMCP): The FastMCP server instance.
-#
-#     Returns:
-#         AsyncIterator[AppContext]: An asynchronous context manager providing the
-#         application context.
-#     """
-#     working_dir = await initialize_working_dir(args.packages)
-#     try:
-#         yield AppContext(working_dir)
-#     finally:
-#         pass
 
 
 # Create our MCP server
@@ -114,8 +84,8 @@ mcp = FastMCP(
 
 @mcp.tool()
 async def execute_python_code(
-    code: str,
-    requirements: str = "",
+        code: str,
+        requirements: str = "",
 ) -> tuple[str, tuple[Image]]:
     """
     Execute Python code in working_dir and return the result.
@@ -148,8 +118,9 @@ async def execute_python_code(
 
         files_before = set(os.listdir(working_dir))
 
+        # Use the current Python executable
         process = await asyncio.create_subprocess_exec(
-            *["uv", "--quiet", "run", temp_path],
+            sys.executable, temp_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir
@@ -159,10 +130,11 @@ async def execute_python_code(
         if process.returncode == 0:
             lines = [stdout.decode('utf-8').strip()]
 
-            common_venv_dirs = {'.venv', '__pypackages__', '.nox', '.tox', 'uv.lock'}
+            # Directories and files to exclude from output listing
+            excluded_dirs = {'.cache'}
 
             # Get list of files after execution
-            files_after = set(os.listdir(working_dir)) - common_venv_dirs
+            files_after = set(os.listdir(working_dir)) - excluded_dirs
 
             # Find new files created during execution
             new_files = files_after - files_before

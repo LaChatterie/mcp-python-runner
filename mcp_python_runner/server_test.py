@@ -22,17 +22,16 @@ async def main():
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                await sleep(20)
 
                 # List available tools for verification
                 tools = await session.list_tools()
                 print("Available tools:", [t.name for t in tools.tools])
 
-                await sleep(20)
                 # Call the tool with arguments (replace as needed)
                 result = await session.call_tool("execute_python_code",
                                                  arguments={"code": "print(4)", "requirements": "matplotlib scipy"})
                 print("Tool result:", result)
+
     finally:
         # Stop the container after the test is complete
         print("Stopping container...")
